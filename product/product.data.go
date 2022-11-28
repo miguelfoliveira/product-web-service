@@ -1,108 +1,157 @@
 package product
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
+	"context"
+	"database/sql"
 	"log"
-	"os"
-	"sort"
-	"sync"
+	"time"
+
+	"github.com/miguelfoliveira/go-web-service/database"
 )
 
-// used to hold our product list in memory
-var productMap = struct {
-	sync.RWMutex
-	m map[int]Product
-}{m: make(map[int]Product)}
+const queryMaxTime = 15 * time.Second
 
-func init() {
-	fmt.Println("loading products...")
-	prodMap, err := loadProductMap()
-	productMap.m = prodMap
+func insertProduct(product Product) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryMaxTime)
+	defer cancel()
+
+	result, err := database.DbConn.ExecContext(ctx, `INSERT INTO products  
+	(manufacturer, 
+	sku, 
+	upc, 
+	pricePerUnit, 
+	quantityOnHand, 
+	productName) VALUES (?, ?, ?, ?, ?, ?)`,
+		product.Manufacturer,
+		product.Sku,
+		product.Upc,
+		product.PricePerUnit,
+		product.QuantityOnHand,
+		product.Name)
+
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err.Error())
+		return 0, nil
 	}
-	fmt.Printf("%d products loaded...\n", len(productMap.m))
+
+	insertId, err := result.LastInsertId()
+
+	if err != nil {
+		log.Println(err.Error())
+		return 0, nil
+	}
+
+	return int(insertId), nil
 }
 
-func loadProductMap() (map[int]Product, error) {
-	fileName := "products.json"
-	_, err := os.Stat(fileName)
-	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("file [%s] does not exist", fileName)
-	}
+func deleteProduct(productId int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), queryMaxTime)
+	defer cancel()
+	_, err := database.DbConn.ExecContext(ctx, `DELETE FROM products WHERE productId =?`,
+		productId)
 
-	file, _ := ioutil.ReadFile(fileName)
-	productList := make([]Product, 0)
-	err = json.Unmarshal([]byte(file), &productList)
 	if err != nil {
-		log.Fatal(err)
-	}
-	prodMap := make(map[int]Product)
-	for i := 0; i < len(productList); i++ {
-		prodMap[productList[i].Id] = productList[i]
-	}
-	return prodMap, nil
-}
-
-func getProduct(productID int) *Product {
-	productMap.RLock()
-	defer productMap.RUnlock()
-	if product, ok := productMap.m[productID]; ok {
-		return &product
+		log.Println(err.Error())
+		return err
 	}
 	return nil
 }
 
-func removeProduct(productID int) {
-	productMap.Lock()
-	defer productMap.Unlock()
-	delete(productMap.m, productID)
-}
+func updateProduct(product Product) error {
+	ctx, cancel := context.WithTimeout(context.Background(), queryMaxTime)
+	defer cancel()
+	_, err := database.DbConn.ExecContext(ctx, `UPDATE products SET 
+	manufacturer=?, 
+	sku=?, 
+	upc=?, 
+	pricePerUnit=CAST(? AS DECIMAL(13,2)), 
+	quantityOnHand=?, 
+	productName=?
+	WHERE productId=?`,
+		product.Manufacturer,
+		product.Sku,
+		product.Upc,
+		product.PricePerUnit,
+		product.QuantityOnHand,
+		product.Name,
+		product.Id)
 
-func getProductList() []Product {
-	productMap.RLock()
-	products := make([]Product, 0, len(productMap.m))
-	for _, value := range productMap.m {
-		products = append(products, value)
+	if err != nil {
+		log.Println(err.Error())
+		return err
 	}
-	productMap.RUnlock()
-	return products
+	return nil
 }
 
-func getProductIds() []int {
-	productMap.RLock()
-	productIds := []int{}
-	for key := range productMap.m {
-		productIds = append(productIds, key)
+func getProduct(productID int) (*Product, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryMaxTime)
+	defer cancel()
+	row := database.DbConn.QueryRowContext(ctx,
+		`SELECT productId,
+		manufacturer,
+		sku,
+		upc,
+		pricePerUnit,
+		quantityOnHand,
+		productName
+		FROM products
+		WHERE productId=  ?`, productID)
+
+	product := &Product{}
+
+	err := row.Scan(
+		&product.Id,
+		&product.Manufacturer,
+		&product.Sku,
+		&product.Upc,
+		&product.PricePerUnit,
+		&product.QuantityOnHand,
+		&product.Name,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, err
+	} else if err != nil {
+		return nil, err
 	}
-	productMap.RUnlock()
-	sort.Ints(productIds)
-	return productIds
+
+	return product, nil
 }
 
-func getNextProductID() int {
-	productIds := getProductIds()
-	return productIds[len(productIds)-1] + 1
-}
+func getProducts() ([]Product, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryMaxTime)
+	defer cancel()
+	rowsResult, err := database.DbConn.QueryContext(ctx, `
+		SELECT productId,
+		manufacturer,
+		sku,
+		upc,
+		pricePerUnit,
+		quantityOnHand,
+		productName
+		FROM products
+	`)
 
-func addOrUpdateProduct(product Product) (int, error) {
-	// if the product id is set, update, otherwise add
-	addOrUpdateID := -1
-	if product.Id > 0 {
-		oldProduct := getProduct(product.Id)
-		// if it exists, replace it, otherwise return error
-		if oldProduct == nil {
-			return 0, fmt.Errorf("product id [%d] doesn't exist", product.Id)
-		}
-		addOrUpdateID = product.Id
-	} else {
-		addOrUpdateID = getNextProductID()
-		product.Id = addOrUpdateID
+	if err != nil {
+		return nil, err
 	}
-	productMap.Lock()
-	productMap.m[addOrUpdateID] = product
-	productMap.Unlock()
-	return addOrUpdateID, nil
+
+	defer rowsResult.Close()
+	products := make([]Product, 0)
+
+	for rowsResult.Next() {
+		var product Product
+		rowsResult.Scan(
+			&product.Id,
+			&product.Manufacturer,
+			&product.Sku,
+			&product.Upc,
+			&product.PricePerUnit,
+			&product.QuantityOnHand,
+			&product.Name,
+		)
+		products = append(products, product)
+	}
+
+	return products, nil
 }
