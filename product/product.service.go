@@ -16,8 +16,12 @@ const productsPath = "products"
 func handleProducts(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		productList := getProductList()
-		j, err := json.Marshal(productList)
+		products, err := getProducts()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		j, err := json.Marshal(products)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -33,7 +37,7 @@ func handleProducts(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		_, err = addOrUpdateProduct(product)
+		_, err = insertProduct(product)
 		if err != nil {
 			log.Print(err)
 			w.WriteHeader(http.StatusBadRequest)
@@ -61,11 +65,18 @@ func handleProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		product := getProduct(productID)
+		product, err := getProduct(productID)
+
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
 		if product == nil {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+
 		j, err := json.Marshal(product)
 		if err != nil {
 			log.Print(err)
@@ -79,8 +90,15 @@ func handleProduct(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPut:
 		var product Product
-		err := json.NewDecoder(r.Body).Decode(&product)
+
+		_, err := getProduct(productID)
 		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		decodeErr := json.NewDecoder(r.Body).Decode(&product)
+		if decodeErr != nil {
 			log.Print(err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -89,14 +107,14 @@ func handleProduct(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		_, err = addOrUpdateProduct(product)
-		if err != nil {
+		updateErr := updateProduct(product)
+		if updateErr != nil {
 			log.Print(err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 	case http.MethodDelete:
-		removeProduct(productID)
+		deleteProduct(productID)
 
 	case http.MethodOptions:
 		return
