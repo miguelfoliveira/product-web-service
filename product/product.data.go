@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/miguelfoliveira/go-web-service/database"
@@ -169,6 +170,66 @@ func GetTopTenProducts() ([]Product, error) {
 	productName 
 	FROM products ORDER BY quantityOnHand DESC LIMIT 10
 	`)
+	if err != nil {
+		log.Println(err.Error())
+		return nil, err
+	}
+	defer results.Close()
+	products := make([]Product, 0)
+	for results.Next() {
+		var product Product
+		results.Scan(&product.Id,
+			&product.Manufacturer,
+			&product.Sku,
+			&product.Upc,
+			&product.PricePerUnit,
+			&product.QuantityOnHand,
+			&product.Name)
+
+		products = append(products, product)
+	}
+	return products, nil
+}
+
+func searchForProductData(productFilter ProductReportFilter) ([]Product, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryMaxTime)
+	defer cancel()
+
+	var queryArgs = make([]interface{}, 0)
+	var queryBuilder strings.Builder
+
+	queryBuilder.WriteString(`SELECT 
+		productId, 
+		LOWER(manufacturer), 
+		LOWER(sku), 
+		upc, 
+		pricePerUnit, 
+		quantityOnHand, 
+		LOWER(productName) 
+		FROM products WHERE `)
+
+	if productFilter.Name != "" {
+		queryBuilder.WriteString(`productName LIKE ? `)
+		queryArgs = append(queryArgs, "%"+strings.ToLower(productFilter.Name)+"%")
+	}
+
+	if productFilter.Manufacturer != "" {
+		if len(queryArgs) > 0 {
+			queryBuilder.WriteString(" AND ")
+		}
+		queryBuilder.WriteString(`manufacturer LIKE ? `)
+		queryArgs = append(queryArgs, "%"+strings.ToLower(productFilter.Manufacturer)+"%")
+	}
+
+	if productFilter.Sku != "" {
+		if len(queryArgs) > 0 {
+			queryBuilder.WriteString(" AND ")
+		}
+		queryBuilder.WriteString(`sku LIKE ? `)
+		queryArgs = append(queryArgs, "%"+strings.ToLower(productFilter.Sku)+"%")
+	}
+
+	results, err := database.DbConn.QueryContext(ctx, queryBuilder.String(), queryArgs...)
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
