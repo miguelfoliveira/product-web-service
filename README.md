@@ -1,2 +1,2 @@
-# go-web-service
-Simple Web Service uisng Golang
+# product-web-service
+Simple Web Service using Golang
